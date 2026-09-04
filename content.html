@@ -12,20 +12,15 @@
 <style>
   html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:transparent; }
   #canvas-wrap { position:absolute; inset:0; }
-  #hud {
-    position:absolute; left:10px; bottom:10px;
-    font: 12px/1.4 "SF Mono", "Consolas", monospace; color:#8fd6c9;
-    background:rgba(10,14,17,.55); padding:6px 10px; border-radius:6px;
-    pointer-events:none; letter-spacing:.02em;
+  #status-dot {
+    position:absolute; right:12px; bottom:12px;
+    width:14px; height:14px; border-radius:50%;
+    background:#8a8f8d; border:2px solid rgba(255,255,255,.65);
+    cursor:pointer; padding:0; box-shadow:0 1px 3px rgba(0,0,0,.25);
+    transition: background .25s, box-shadow .25s;
   }
-  #hud b { color:#e8fbf6; }
-  #reset-btn {
-    position:absolute; right:10px; bottom:10px;
-    font:12px system-ui, sans-serif; color:#e8fbf6;
-    background:rgba(10,14,17,.55); border:1px solid rgba(143,214,201,.35);
-    padding:6px 12px; border-radius:6px; cursor:pointer;
-  }
-  #reset-btn:hover { background:rgba(10,14,17,.8); }
+  #status-dot.connected { background:#2fd18f; box-shadow:0 0 8px rgba(47,209,143,.8); }
+  #status-dot:hover { transform: scale(1.15); }
   #error-msg {
     position:absolute; left:10px; top:10px; right:10px;
     font:12px system-ui, sans-serif; color:#ffb4b4;
@@ -36,8 +31,7 @@
 </head>
 <body>
 <div id="canvas-wrap"></div>
-<div id="hud">Sala <b id="room-label">-</b> &middot; <span id="status">conectando&hellip;</span></div>
-<button id="reset-btn">Reiniciar vista</button>
+<button id="status-dot" title="Reiniciar vista" aria-label="Estado de conexión — clic para reiniciar la vista"></button>
 <div id="error-msg"></div>
 
 <script>
@@ -62,7 +56,6 @@ const CONFIG = {
 
 const params = new URLSearchParams(location.search);
 const room = params.get("room") || CONFIG.room;
-document.getElementById("room-label").textContent = room;
 
 function showError(msg) {
   const el = document.getElementById("error-msg");
@@ -86,10 +79,14 @@ renderer.setPixelRatio(window.devicePixelRatio || 1);
 renderer.setSize(wrap.clientWidth, wrap.clientHeight);
 wrap.appendChild(renderer.domElement);
 
-scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 1.15));
-const key = new THREE.DirectionalLight(0xffffff, 0.55);
+scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+scene.add(new THREE.HemisphereLight(0xffffff, 0x3a3a3a, 0.5));
+const key = new THREE.DirectionalLight(0xffffff, 0.45);
 key.position.set(2, 3, 2);
 scene.add(key);
+const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+fillLight.position.set(-2, 1.5, -1.5);
+scene.add(fillLight);
 
 const pivot = new THREE.Group();
 scene.add(pivot);
@@ -126,7 +123,7 @@ function applyDelta(d) {
   if (d.dZoom) targetZoom = Math.max(1.1, Math.min(6, targetZoom + d.dZoom));
 }
 
-document.getElementById("reset-btn").addEventListener("click", () => applyDelta({ reset: true }));
+document.getElementById("status-dot").addEventListener("click", () => applyDelta({ reset: true }));
 
 // Respaldo local: si tocás o arrastrás directamente sobre la diapositiva, también rota
 let dragging = false, lastX = 0, lastY = 0;
@@ -140,18 +137,17 @@ window.addEventListener("pointermove", (e) => {
 renderer.domElement.addEventListener("wheel", (e) => applyDelta({ dZoom: e.deltaY * 0.0015 }), { passive: true });
 
 // ---------------- Conexión con el celular (Firebase Realtime Database) ----------------
-const statusEl = document.getElementById("status");
+const statusDot = document.getElementById("status-dot");
 firebase.initializeApp(CONFIG.firebase);
 const db = firebase.database();
 const commandsRef = db.ref("rooms/" + room + "/commands");
 
 db.ref(".info/connected").on("value", (snap) => {
-  statusEl.textContent = snap.val() ? "esperando celular\u2026" : "sin conexi\u00f3n a internet\u2026";
+  statusDot.classList.toggle("connected", !!snap.val());
 });
 
 commandsRef.on("child_added", (snap) => {
   applyDelta(snap.val());
-  statusEl.textContent = "celular conectado";
   snap.ref.remove(); // ya se aplicó, lo borramos para no acumular datos
 });
 
