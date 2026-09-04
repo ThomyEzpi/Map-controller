@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Visor 3D AFM</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  html, body { margin:0; padding:0; width:100%; height:100%; overflow:hidden; background:transparent; }
+  #canvas-wrap { position:absolute; inset:0; }
+  #hud {
+    position:absolute; left:10px; bottom:10px;
+    font: 12px/1.4 "SF Mono", "Consolas", monospace; color:#8fd6c9;
+    background:rgba(10,14,17,.55); padding:6px 10px; border-radius:6px;
+    pointer-events:none; letter-spacing:.02em;
+  }
+  #hud b { color:#e8fbf6; }
+  #reset-btn {
+    position:absolute; right:10px; bottom:10px;
+    font:12px system-ui, sans-serif; color:#e8fbf6;
+    background:rgba(10,14,17,.55); border:1px solid rgba(143,214,201,.35);
+    padding:6px 12px; border-radius:6px; cursor:pointer;
+  }
+  #reset-btn:hover { background:rgba(10,14,17,.8); }
+  #error-msg {
+    position:absolute; left:10px; top:10px; right:10px;
+    font:12px system-ui, sans-serif; color:#ffb4b4;
+    background:rgba(40,10,10,.65); padding:8px 10px; border-radius:6px;
+    display:none;
+  }
+</style>
+</head>
+<body>
+<div id="canvas-wrap"></div>
+<div id="hud">Sala <b id="room-label">-</b> &middot; <span id="status">conectando&hellip;</span></div>
+<button id="reset-btn">Reiniciar vista</button>
+<div id="error-msg"></div>
+
+<script>
+/* ============================================================
+   EDITÁ SOLO ESTA SECCIÓN
+   ============================================================ */
+const CONFIG = {
+  modelUrl: "./model.glb",     // el .glb debe estar en la misma carpeta que este archivo
+  room: "afm-sala-1",          // código de sala: tiene que ser IGUAL en remote.html
+  verticalExaggeration: 1.0,   // exageración vertical extra (además de la que ya trae el .glb)
+  firebase: {
+    apiKey: "PEGAR_AQUI",
+    authDomain: "PEGAR_AQUI",
+    databaseURL: "PEGAR_AQUI",
+    projectId: "PEGAR_AQUI",
+    storageBucket: "PEGAR_AQUI",
+    messagingSenderId: "PEGAR_AQUI",
+    appId: "PEGAR_AQUI"
+  }
+};
+/* ============================================================ */
+
+const params = new URLSearchParams(location.search);
+const room = params.get("room") || CONFIG.room;
+document.getElementById("room-label").textContent = room;
+
+function showError(msg) {
+  const el = document.getElementById("error-msg");
+  el.textContent = msg;
+  el.style.display = "block";
+}
+
+// Le avisamos a Office que la página está lista (recomendado para content add-ins)
+if (window.Office && Office.onReady) {
+  Office.onReady().catch(() => {});
+}
+
+// ---------------- Escena 3D ----------------
+const wrap = document.getElementById("canvas-wrap");
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(35, wrap.clientWidth / wrap.clientHeight, 0.01, 100);
+camera.position.set(0, 1.4, 2.6);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio || 1);
+renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+wrap.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x222233, 1.15));
+const key = new THREE.DirectionalLight(0xffffff, 0.55);
+key.position.set(2, 3, 2);
+scene.add(key);
+
+const pivot = new THREE.Group();
+scene.add(pivot);
+
+new THREE.GLTFLoader().load(
+  CONFIG.modelUrl,
+  (gltf) => {
+    const model = gltf.scene;
+    const box = new THREE.Box3().setFromObject(model);
+    const size = new THREE.Vector3(); box.getSize(size);
+    const center = new THREE.Vector3(); box.getCenter(center);
+    model.position.sub(center);
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    model.scale.setScalar(1.6 / maxDim);
+    model.scale.y *= CONFIG.verticalExaggeration;
+    pivot.add(model);
+  },
+  undefined,
+  (err) => {
+    showError("No se pudo cargar " + CONFIG.modelUrl + ". Revisá que el archivo esté subido junto a este HTML.");
+    console.error(err);
+  }
+);
+
+// ---------------- Estado de rotación / zoom (con suavizado) ----------------
+let targetRotY = -0.6, targetRotX = 0.35, targetZoom = 2.6;
+let curRotY = targetRotY, curRotX = targetRotX, curZoom = targetZoom;
+
+function applyDelta(d) {
+  if (!d) return;
+  if (d.reset) { targetRotX = 0.35; targetRotY = -0.6; targetZoom = 2.6; return; }
+  if (d.dRotY) targetRotY += d.dRotY;
+  if (d.dRotX) targetRotX = Math.max(-1.3, Math.min(1.3, targetRotX + d.dRotX));
+  if (d.dZoom) targetZoom = Math.max(1.1, Math.min(6, targetZoom + d.dZoom));
+}
+
+document.getElementById("reset-btn").addEventListener("click", () => applyDelta({ reset: true }));
+
+// Respaldo local: si tocás o arrastrás directamente sobre la diapositiva, también rota
+let dragging = false, lastX = 0, lastY = 0;
+renderer.domElement.addEventListener("pointerdown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener("pointerup", () => dragging = false);
+window.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  applyDelta({ dRotY: (e.clientX - lastX) * 0.006, dRotX: (e.clientY - lastY) * 0.006 });
+  lastX = e.clientX; lastY = e.clientY;
+});
+renderer.domElement.addEventListener("wheel", (e) => applyDelta({ dZoom: e.deltaY * 0.0015 }), { passive: true });
+
+// ---------------- Conexión con el celular (Firebase Realtime Database) ----------------
+const statusEl = document.getElementById("status");
+firebase.initializeApp(CONFIG.firebase);
+const db = firebase.database();
+const commandsRef = db.ref("rooms/" + room + "/commands");
+
+db.ref(".info/connected").on("value", (snap) => {
+  statusEl.textContent = snap.val() ? "esperando celular\u2026" : "sin conexi\u00f3n a internet\u2026";
+});
+
+commandsRef.on("child_added", (snap) => {
+  applyDelta(snap.val());
+  statusEl.textContent = "celular conectado";
+  snap.ref.remove(); // ya se aplicó, lo borramos para no acumular datos
+});
+
+// ---------------- Loop de render ----------------
+function animate() {
+  requestAnimationFrame(animate);
+  curRotY += (targetRotY - curRotY) * 0.15;
+  curRotX += (targetRotX - curRotX) * 0.15;
+  curZoom += (targetZoom - curZoom) * 0.15;
+  pivot.rotation.y = curRotY;
+  pivot.rotation.x = curRotX;
+  camera.position.setLength(curZoom);
+  camera.lookAt(0, 0, 0);
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener("resize", () => {
+  camera.aspect = wrap.clientWidth / wrap.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+});
+</script>
+</body>
+</html>
