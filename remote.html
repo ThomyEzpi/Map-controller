@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Control remoto &mdash; Visor AFM</title>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-database-compat.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; height:100%; background:#0d1216; color:#e8fbf6; font-family: system-ui, -apple-system, sans-serif; overflow:hidden; }
+  #top { position:absolute; top:0; left:0; right:0; padding:14px 16px 8px; display:flex; align-items:center; justify-content:space-between; }
+  #room { font-size:14px; letter-spacing:.02em; color:#8fd6c9; }
+  #room b { color:#e8fbf6; }
+  #status { font-size:12px; color:#8fd6c9; }
+  #dot { width:9px; height:9px; border-radius:50%; background:#5a6a68; display:inline-block; margin-right:6px; vertical-align:middle; }
+  #dot.on { background:#3ee6b8; box-shadow:0 0 8px #3ee6b8; }
+  #pad {
+    position:absolute; left:0; right:0; top:56px; bottom:110px; touch-action:none;
+    background: radial-gradient(circle at 50% 42%, rgba(63,230,184,.07), transparent 60%);
+  }
+  #pad .hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    text-align:center; color:#3a4a48; font-size:14px; line-height:1.6; pointer-events:none; padding:0 30px; }
+  #bottom { position:absolute; left:0; right:0; bottom:0; padding:14px 16px 22px; display:flex; gap:12px; align-items:center; }
+  input[type=range] { flex:1; accent-color:#3ee6b8; }
+  button {
+    background:#16201f; color:#e8fbf6; border:1px solid rgba(143,214,201,.35);
+    border-radius:10px; padding:12px 16px; font-size:14px; white-space:nowrap;
+  }
+  button:active { background:#1e2c2a; }
+  #room-input {
+    background:#16201f; color:#e8fbf6; border:1px solid rgba(143,214,201,.35);
+    border-radius:8px; padding:6px 8px; font-size:13px; width:110px;
+  }
+</style>
+</head>
+<body>
+<div id="top">
+  <div id="room"><span id="dot"></span>Sala <input id="room-input" type="text"></div>
+  <div id="status">conectando&hellip;</div>
+</div>
+<div id="pad"><div class="hint">Arrastr&aacute; con un dedo para rotar<br>Pellizc&aacute; con dos dedos para zoom</div></div>
+<div id="bottom">
+  <button id="reset">Reiniciar</button>
+  <input id="zoom" type="range" min="-1" max="1" step="0.01" value="0">
+</div>
+
+<script>
+/* ============================================================
+   EDITÁ SOLO ESTA SECCIÓN
+   ============================================================ */
+const DEFAULT_ROOM = "afm-sala-1"; // tiene que ser IGUAL al "room" de content.html
+const FIREBASE_CONFIG = {
+  apiKey: "PEGAR_AQUI",
+  authDomain: "PEGAR_AQUI",
+  databaseURL: "PEGAR_AQUI",
+  projectId: "PEGAR_AQUI",
+  storageBucket: "PEGAR_AQUI",
+  messagingSenderId: "PEGAR_AQUI",
+  appId: "PEGAR_AQUI"
+};
+/* ============================================================ */
+
+const params = new URLSearchParams(location.search);
+let room = params.get("room") || DEFAULT_ROOM;
+const roomInput = document.getElementById("room-input");
+roomInput.value = room;
+
+const dot = document.getElementById("dot");
+const statusEl = document.getElementById("status");
+
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.database();
+let commandsRef = db.ref("rooms/" + room + "/commands");
+
+db.ref(".info/connected").on("value", (snap) => {
+  dot.classList.toggle("on", !!snap.val());
+  statusEl.textContent = snap.val() ? "conectado" : "sin conexión a internet";
+});
+
+function connect() {
+  room = roomInput.value.trim() || DEFAULT_ROOM;
+  commandsRef = db.ref("rooms/" + room + "/commands");
+}
+
+roomInput.addEventListener("change", connect);
+
+function send(payload) { commandsRef.push({ ...payload, ts: Date.now() }); }
+
+// ---------------- Gestos táctiles ----------------
+const pad = document.getElementById("pad");
+let lastX = 0, lastY = 0, lastDist = 0, mode = null;
+
+function dist(t0, t1) { return Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY); }
+
+pad.addEventListener("touchstart", (e) => {
+  if (e.touches.length === 1) { mode = "rotate"; lastX = e.touches[0].clientX; lastY = e.touches[0].clientY; }
+  else if (e.touches.length === 2) { mode = "zoom"; lastDist = dist(e.touches[0], e.touches[1]); }
+}, { passive: true });
+
+pad.addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  if (mode === "rotate" && e.touches.length === 1) {
+    const x = e.touches[0].clientX, y = e.touches[0].clientY;
+    send({ dRotY: (x - lastX) * 0.01, dRotX: (y - lastY) * 0.01 });
+    lastX = x; lastY = y;
+  } else if (mode === "zoom" && e.touches.length === 2) {
+    const d = dist(e.touches[0], e.touches[1]);
+    send({ dZoom: (lastDist - d) * 0.01 });
+    lastDist = d;
+  }
+}, { passive: false });
+
+pad.addEventListener("touchend", () => { mode = null; }, { passive: true });
+
+// Respaldo con mouse (para probar desde una notebook antes de la charla)
+let dragging = false;
+pad.addEventListener("mousedown", (e) => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+window.addEventListener("mouseup", () => dragging = false);
+window.addEventListener("mousemove", (e) => {
+  if (!dragging) return;
+  send({ dRotY: (e.clientX - lastX) * 0.01, dRotX: (e.clientY - lastY) * 0.01 });
+  lastX = e.clientX; lastY = e.clientY;
+});
+
+document.getElementById("reset").addEventListener("click", () => send({ reset: true }));
+
+const zoomSlider = document.getElementById("zoom");
+zoomSlider.addEventListener("input", () => {
+  send({ dZoom: -zoomSlider.value * 0.15 });
+  zoomSlider.value = 0;
+});
+</script>
+</body>
+</html>
